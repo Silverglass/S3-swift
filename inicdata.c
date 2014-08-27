@@ -137,6 +137,7 @@ int inic_rmngr_process_request(cvm_common_wqe_t *swp);
 
 #define ANVL_RFC_793_COMPLIANCE
 
+static uint64_t print_int = 0;
 
 void S3_send_packet(cvmx_wqe_t * work)
 {
@@ -413,13 +414,17 @@ int StrFind(char * ptr, int length, char * str)
 
 http_data * http_parse(cvm_common_wqe_t * swp, State status)
 {
+		//printf("http_parse \n");
 		http_data * http = (http_data *) cvmx_phys_to_ptr(cvm_common_alloc_fpa_buffer_sync(CVMX_FPA_PACKET_POOL));
 		if(http == NULL)
 				return http;
 		memset(http, 0, sizeof(http_data));
 		cvm_tcp_tcphdr_t *th;
 		th = ((cvm_tcp_tcphdr_t *) & (swp->hw_wqe.packet_data[swp->l4_offset]));
-		int header_len = th->th_off << 2;//length of Tcp header
+		//printf("th_off = %d\n", th->th_off);
+		int header_len = th->th_off << 2;
+
+		//printf("header_len = %d\n", header_len);
 
 		char * ptr = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
 		int res = -1;
@@ -428,11 +433,13 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 		//Client->Server
 		if(swp->hw_wqe.ipprt < portbase + portnum)
 		{
+				//printf("C to S\n");
 				if(StrFind(ptr+pos, 3, "GET") != -1 || StrFind(ptr+pos, 3, "PUT") != -1 || StrFind(ptr+pos, 4, "HTTP") != -1 || StrFind(ptr+pos, 4, "HEAD") != -1 || StrFind(ptr+pos, 6, "DELETE") != -1)
 				{
 					http->is_http = true;
 				}
-				return http;
+				else	
+					return http;
 				if(status == S0)
 				{
 						//16 is the length of "GET / HTTP/1.1\r\n"
@@ -479,9 +486,11 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 				}
 				else if(status == S2)
 				{
+						printf("S2\n");
 						res = StrFind(ptr+pos, 3, "PUT");
 						if(res == -1)
 								return http;
+						printf("find  PUT!!\n");
 						pos += 3;
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "HTTP/1.1\r\n");
 						if(res == -1)
@@ -595,6 +604,7 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 
 void encryption(uint8_t * enc_map, cvm_common_wqe_t * swp, uint32_t pos)
 {
+		//printf("encryption!!!\n");
 		//return ;
 		uint8_t * ptr = (uint8_t *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
 		int i = 0;
@@ -606,25 +616,31 @@ void encryption(uint8_t * enc_map, cvm_common_wqe_t * swp, uint32_t pos)
 
 int process_handle(cvm_common_wqe_t * swp)
 {
-		if(cvmx_get_cycle() - mytime > 8000000000)
+		/*
+		if(print_int < 5)
 		{
-				cvmx_pow_iq_com_cnt_t pow_iq_com_cnt;
-				pow_iq_com_cnt.u64 = cvmx_read_csr(CVMX_POW_IQ_COM_CNT);
-				printf("PAKCET:%llu,     WQE:%llu,   POW:%llu\n", cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_PACKET_POOL)), cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_WQE_POOL)), pow_iq_com_cnt.s.iq_cnt);
-				mytime = cvmx_get_cycle();
-		}
-		
-		
-		//return 0;
-		char * ptr = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
-		//printf("%X  print packet:\n", swp->hw_wqe.tag);
-		int n = 0;
-		while(n < 10)
+				cvm_tcp_tcphdr_t *th;
+				th = ((cvm_tcp_tcphdr_t *) & (swp->hw_wqe.packet_data[swp->l4_offset]));
+				//printf("th_off = %d\n", th->th_off);
+				int header_len = th->th_off << 2;
+
+
+		printf("process_handle:\n");
+		char * ptr_p = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
+		ptr_p += 34 + header_len;
+		int i = 0;
+		for(i=1; i<201; i++)
 		{
-		// 	printf("%c", *(ptr+54+n));
-			n++;
+			printf("%02x",*ptr_p);
+			ptr_p++;
+			if(i%20 == 0)
+				printf("\n");
 		}
-		//printf("\n");
+		printf("\n\n");
+		print_int++;
+		}
+
+		*/
 		int res = 1;
 		list1_entry_t * list1 = list1_lookup(swp);
 		if(list1 != NULL)
@@ -637,18 +653,7 @@ int process_handle(cvm_common_wqe_t * swp)
 				//如果为拆链接数据包，则需要删除相应规则列表项
 				if(th->th_flags & 0x05)// fin is 0x01; rst is 0x04
 				{			
-						//list2_entry_t * list2 = list2_lookup(list1);
-						//list2.list1_links--;
-						//if(list2.list1_links == 0)
-						//{
-						//没有list1_entry链接到list2_entry上，删除list2_entry 
-						//cvm_common_free_fpa_buffer(list2, CVM_FPA_1024B_POOL, 8);
-						//list2 = NULL;
-						//}
-						//删除list1_entry
-
-						//cvm_common_free_fpa_buffer(list1, CVM_FPA_1024B_POOL, 8);
-						printf("find TCP rst or fin\n");
+											printf("find TCP rst or fin\n");
 					    list1_discard_lookup_entry(swp);	
 						list1 = NULL;	
 						return res;
@@ -665,32 +670,7 @@ int process_handle(cvm_common_wqe_t * swp)
 						{
 								if(http_entry->login_done == true)
 								{
-										/*
-										   if(list2_lookup(list1) == NULL)
-										   {
-										   list2_entry_t * list2 = make_list2_entry(list1);
-										//TODO get_secretkey() needs to connect to keys server
-										//list2->secret_key = get_secretkey(list1->username);
-										hash_md5(list2->secret_key, (uint8_t*)list1->username, strlen(list1->username));
-
-										uint8_t tmp[256];
-										RC4_KEY rkey;
-										int i=0;
-										for(i=0;i<256;i++)
-										tmp[i]=i;
-										for(i=0;i<256;i++)
-										{
-										RC4_set_key (&rkey, 16, key);
-										RC4 (&rkey, 1, tmp+i, list2->enc_map+i);						
-										}	
-										memcpy(list1->enc_map, list2->enc_map, 16);				
-										list2->list1_links = 1;
-										//TODO tag2 = md5 sum
-										uint32_t * ptr = (uint32_t *)list2->secret_key;
-										list2->tag2 = ptr[0] + ptr[1] + ptr[2] + ptr[3];
-										list2->label = 2;
-										}*/
-										printf("login_done \n");
+																			printf("login_done \n");
 										hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
 
 										uint8_t tmp[256];
@@ -721,18 +701,6 @@ int process_handle(cvm_common_wqe_t * swp)
 										if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
 										{
 												printf("put content, encrypt first packet\n");
-												/*
-												int i = 0;
-												char * ptrp = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr); 
-												printf("http_entry->pos %d", http_entry->pos);
-												while(i<100)
-												{
-													printf("%X", ptrp + i + http_entry->pos);
-													if(i%15 == 0)
-														printf("\n");
-												}
-												printf("\n");
-												*/
 												encryption(list1->enc_map, swp, http_entry->pos);
 												res = 0;
 										}
@@ -791,62 +759,79 @@ int process_handle(cvm_common_wqe_t * swp)
 				//printf("not in list1\n");
 				//是否为服务器与客户端之间的新建链接
 				http_data * http_entry;
-				http_entry = http_parse(swp, S0);
+				http_entry = http_parse(swp, S2);
 				if(http_entry->is_http == true)
 				{
-						if(http_entry->login == true)//用户创建新链接时发送
+						if(http_entry->put_content == true)//PUT  test
 						{
-								printf("login\n");
+								printf("put test\n");
 								list1_entry_t * list1 = make_list1_entry(swp);
-								/*
-								if(list1 != NULL)
-								 	printf("after make  list1 != NULL\n");
-								 else
-								 	printf("after make  list1 == NULL\n");
-
-
-
-
-								 list1 = list1_lookup(swp);
-								 if(list1 != NULL)
-								 	printf("after lookup  list1 != NULL\n");
-								 else
-								 	printf("after lookup list1 == NULL\n");
-								
-								 list1_discard_lookup_entry(swp);
-								 list1 = list1_lookup(swp);	
-								 if(list1 != NULL)
-										 printf("after discard  list1 != NULL\n");
-								 else
-										 printf("after discard list1 == NULL\n");
-
-								 list1 = make_list1_entry(swp);
-								 if(list1 != NULL)
-										 printf("after make again list1 != NULL\n");
-								 else
-										 printf("after make again list1 == NULL\n");
-
-								
-								 list1 = list1_lookup(swp);
-								 if(list1 != NULL)
-								 	printf("after lookup again list1 != NULL\n");
-								 else
-								 	printf("after lookup again list1 == NULL\n");
-								*/
-
-								/*
-								   填写list1结构体的数据部分 
-								 */
 								list1->tag1 = swp->hw_wqe.tag;
-								memcpy(list1->username, http_entry->username, 128);
+								memcpy(list1->username, "put test", 8);
+								hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
+
+								uint8_t tmp[256];
+								RC4_KEY rkey;
+								int i=0;
+								for(i=0;i<256;i++)
+										tmp[i]=i;
+								for(i=0;i<256;i++)
+								{
+										RC4_set_key (&rkey, 16, list1->secret_key);
+										RC4 (&rkey, 1, tmp+i, list1->enc_map+i);						
+								}					
+
 
 								//hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
-								list1->status = S1;
+								list1->status = S3;
 								list1->inport = swp->hw_wqe.ipprt;
 								if( list1->inport >= portbase + portnum)
 										list1->outport = list1->inport - portnum;
 								else
 										list1->outport = list1->inport + portnum;
+								if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
+								{
+										encryption(list1->enc_map, swp, http_entry->pos);
+										printf("put test encrypt first packet, inport: %d\n",swp->hw_wqe.ipprt);
+										res = 0;
+								}
+
+						}
+						else if(http_entry->get_content == true)
+						{
+
+								printf("get test\n");
+								list1_entry_t * list1 = make_list1_entry(swp);
+								list1->tag1 = swp->hw_wqe.tag;
+								memcpy(list1->username, "get test", 8);
+								hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
+
+								uint8_t tmp[256];
+								RC4_KEY rkey;
+								int i=0;
+								for(i=0;i<256;i++)
+										tmp[i]=i;
+								for(i=0;i<256;i++)
+								{
+										RC4_set_key (&rkey, 16, list1->secret_key);
+										RC4 (&rkey, 1, tmp+i, list1->enc_map+i);						
+								}					
+
+
+								//hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
+								list1->status = S3;
+								list1->inport = swp->hw_wqe.ipprt;
+								if( list1->inport >= portbase + portnum)
+										list1->outport = list1->inport - portnum;
+								else
+										list1->outport = list1->inport + portnum;
+								if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
+								{
+										encryption(list1->enc_map, swp, http_entry->pos);
+										printf("get test encrypt first packet\n");
+										res = 0;
+								}
+
 						}
 
 				}
