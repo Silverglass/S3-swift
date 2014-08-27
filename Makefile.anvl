@@ -1,0 +1,140 @@
+#
+#  OCTEON TOOLKITS                                                         
+#  Copyright (c) 2007 Cavium Networks. All rights reserved.
+#
+#  This file, which is part of the OCTEON TOOLKIT from Cavium Networks,
+#  contains proprietary and confidential information of Cavium Networks
+#  and in some cases its suppliers.
+#
+#  Any licensed reproduction, distribution, modification, or other use of
+#  this file or confidential information embodied in this file is subject
+#  to your license agreement with Cavium Networks. The applicable license
+#  terms can be found by contacting Cavium Networks or the appropriate
+#  representative within your company.
+#
+#  All other use and disclosure is prohibited.
+#
+#  Contact Cavium Networks at info@caviumnetworks.com for more information.
+#
+
+#
+#  application Makefile
+#
+#  $Id: Makefile.anvl 28095 2007-09-13 00:34:20Z vmurgai $ $Name$
+#
+#    subdirectory config/ contains all the configuration header files.
+#        for example config/cvmx-config contains the exec/system config,
+#        config/global-config contains global config across components,
+#        config/comp1-config contains component config for comp1.
+#    subdirectory obj/ contains intermediate build and library files.
+#
+
+NUM_PROCESSORS = 2
+NUM_APP_PROCESSORS = 1
+
+#  default target
+
+default: inicmain 
+	cp inicmain tcpinicmain
+	mips64-octeon-linux-gnu-strip tcpinicmain
+
+#  standard common Makefile fragment
+include $(OCTEON_ROOT)/common.mk
+
+# core masks
+CORE_MASKS = -DNUM_PROCESSORS=$(NUM_PROCESSORS) -DNUM_APP_PROCESSORS=$(NUM_APP_PROCESSORS)
+
+#  global debug setting for compile
+DEBUG_FLAGS = -DOCTEON_DEBUG_LEVEL=4
+#DEBUG_FLAGS = 
+
+ifeq (${CVM_IP6},1)
+#CC_FLAGS =  -DINET6 -DCVM_IP6_FASTPATH 
+CC_FLAGS =  -DDEBUG_IP6 -DINET6  -DCVM_ROUTE_DEBUG -DCVM_IP6_FASTPATH 
+endif
+
+CC_FLAGS += -DANVL_OCTEON_PORT
+
+COMPILE += -Wall -Wa,-a=$@.list -Wno-unused-parameter -O2 -g -fno-strict-aliasing $(DEBUG_FLAGS) $(CORE_MASKS) $(CC_FLAGS)
+COMPILE += -DTEMP_SDK_BUILD_NUMBER=`oct-version | sed -n "s/.* build \(.*\)/\1/p"`
+
+GCC_VER = $(shell $(CC) --version | grep GCC)
+SDK_VER = `oct-version`
+
+COMPILE += -DGCC_VERSION=\""$(GCC_VER)\""
+COMPILE += -DSDK_VERSION=\""$(SDK_VER)\""
+
+#  include needed component Makefile fragments
+
+dir := $(OCTEON_ROOT)/components/common
+include $(dir)/common.mk
+
+dir := $(OCTEON_ROOT)/components/socket
+include $(dir)/socket.mk
+
+dir := $(OCTEON_ROOT)/components/tcp
+include $(dir)/tcp.mk
+
+dir := $(OCTEON_ROOT)/components/udp
+include $(dir)/udp.mk
+
+dir := $(OCTEON_ROOT)/components/ip
+include $(dir)/ip.mk
+
+dir := $(OCTEON_ROOT)/components/enet
+include $(dir)/enet.mk
+
+ifeq (${CVM_IP6},1)
+dir := $(OCTEON_ROOT)/components/ip6
+include $(dir)/ip6.mk
+endif
+
+dir := $(OCTEON_ROOT)/executive
+include $(dir)/cvmx.mk
+
+#  application specification
+
+TARGET        =  inicmain
+
+ECHO_SERVER   = $(OBJ_DIR)/app-echo-server.o
+CLIENT_APP    = $(OBJ_DIR)/app-client.o
+ANVL_STUB_APP = $(OBJ_DIR)/mntcpapp.o\
+                $(OBJ_DIR)/mntcplnx.o
+
+OBJS          =	$(OBJ_DIR)/inicmain.o \
+		$(OBJ_DIR)/inicdata.o \
+		$(OBJ_DIR)/inicapp.o \
+		$(ECHO_SERVER) \
+		$(CLIENT_APP) \
+                $(ANVL_STUB_APP)
+
+CLI_APP_INCLUDE = $(OCTEON_ROOT)/bootloader/u-boot/include/
+
+CFLAGS_LOCAL = -g -O2 -W -Wall -Wno-unused-parameter -I$(CLI_APP_INCLUDE)
+CFLAGS_G = -G $(if $(shell $(CC) --version | grep 3.4),5,7)
+
+ifeq (${OCTEON_TARGET},cvmx_n32)
+COMPILE += $(CFLAGS_G)
+CFLAGS_LOCAL += $(CFLAGS_G)
+endif
+
+include $(OCTEON_ROOT)/application.mk
+
+#  clean target
+
+clean:
+	rm -f $(TARGET)
+	rm -f $(CVMX_CONFIG)
+	rm -fr $(OBJ_DIR)
+
+run:	
+	#
+	# Run the simulation. All outout will go in output.log but console
+	# messages will also display to the user.
+	 oct-sim inicmain -quiet -wait=inic_data_loop -serve=2000 -uart1=2001 -memsize=512 -numpps=${NUM_PROCESSORS} -modes=fastboot
+debug:	
+	#
+	# Debug the simulation. All outout will go in output.log but console
+	# messages will also display to the user.
+	#
+	oct-debug inicmain -debug -noperf -quiet -serve=2000 -uart1=2001 -memsize=512 -numpps=${NUM_PROCESSORS} -modes=spi0,spi1,fastboot
