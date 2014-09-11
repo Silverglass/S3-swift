@@ -617,6 +617,13 @@ int process_handle(cvm_common_wqe_t * swp)
 		
 		//return 0;
 		char * ptr = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
+
+		//cvm_tcp_tcphdr_t is tcp head,defined in Cvm-tcp.h
+		cvm_tcp_tcphdr_t *th;
+		th = ((cvm_tcp_tcphdr_t *) & (swp->hw_wqe.packet_data[swp->l4_offset]));
+		int header_len = th->th_off << 2;//length of Tcp header	
+
+
 		//printf("%X  print packet:\n", swp->hw_wqe.tag);
 		int n = 0;
 		while(n < 10)
@@ -630,9 +637,7 @@ int process_handle(cvm_common_wqe_t * swp)
 		if(list1 != NULL)
 		{
 				//printf("in list1 \n");
-				//cvm_tcp_tcphdr_t is tcp head,defined in Cvm-tcp.h
-				cvm_tcp_tcphdr_t *th;
-				th = ((cvm_tcp_tcphdr_t *) & (swp->hw_wqe.packet_data[swp->l4_offset]));
+
 
 				//如果为拆链接数据包，则需要删除相应规则列表项
 				if(th->th_flags & 0x05)// fin is 0x01; rst is 0x04
@@ -774,7 +779,7 @@ int process_handle(cvm_common_wqe_t * swp)
 								res = 0;
 								//54 is the length of MAC+IP+TCP
 								//printf("encryption! \n");
-								encryption(list1->enc_map, swp, 54);
+								encryption(list1->enc_map, swp, header_len+34);
 								//printf("after encryption\n");
 								cvm_common_free_fpa_buffer ((void*)http_entry, CVMX_FPA_PACKET_POOL, CVMX_FPA_PACKET_POOL_SIZE / CVMX_CACHE_LINE_SIZE);	
 								http_entry = NULL;
