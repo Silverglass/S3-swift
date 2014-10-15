@@ -422,7 +422,7 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 		int header_len = th->th_off << 2;//length of Tcp header
 
 		char * ptr = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr);
-		int res = -1;
+		int res = -1;				
 		int pos = 34 + header_len;
 
 		//Client->Server
