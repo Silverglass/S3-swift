@@ -431,8 +431,8 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 				if(StrFind(ptr+pos, 3, "GET") != -1 || StrFind(ptr+pos, 3, "PUT") != -1 || StrFind(ptr+pos, 4, "HTTP") != -1 || StrFind(ptr+pos, 4, "HEAD") != -1 || StrFind(ptr+pos, 6, "DELETE") != -1)
 				{
 					http->is_http = true;
-				}
-				return http;
+				}else
+					return http;
 				if(status == S0)
 				{
 						//16 is the length of "GET / HTTP/1.1\r\n"
