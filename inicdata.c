@@ -380,8 +380,14 @@ int inic_data_local_init(void)
 		return 0;
 }
 
+typedef enum{
+	S3_i,
+	swift
+} interface;
+
 typedef struct http_data_t
 {
+		interface interf;
 		bool is_http;
 		bool login;
 		bool login_done;
@@ -392,6 +398,8 @@ typedef struct http_data_t
 		bool put_done;
 		uint32_t  pos;//指向需要加解密的数据的起始位置 
 		uint8_t username[128];// Authorization： AWS username:XXX   2 
+		uint8_t password[128];//password for swift
+		uint8_t auth_token[128];//X-Auth-Token for openstack swift usually 47 chars
 } http_data;
 
 int StrFind(char * ptr, int length, char * str)
@@ -435,10 +443,22 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 					return http;
 				if(status == S0)
 				{
-						//16 is the length of "GET / HTTP/1.1\r\n"
-						res = StrFind(ptr+pos, 16, "GET / HTTP/1.1\r\n");
-						if(res == -1)
-								return http;
+						if (StrFind(ptr+pos, 16, "GET / HTTP/1.1\r\n") != -1)
+						{
+							goto S3_LOGIN;
+						}else if (StrFind(ptr+pos, 25, "GET /auth/v1.0 HTTP/1.1\r\n") != -1)
+						{
+							goto SWIFT_LOGIN;
+						}else if (StrFind(ptr+pos, 3, "PUT") != -1)//to tell whether it is swift put?
+						{
+							goto SWIFT_PUT;
+						}else if (StrFind(ptr+pos, 3, "GET") != -1)//to tell whether it is swift get?
+						{
+							goto SWIFT_GET;
+						}else return http;
+
+S3_LOGIN:
+						//S3 login		
 						//printf("GET / HTTP/1.1	%d\n", res);
 						pos += 16;
 
@@ -474,8 +494,70 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						{
 								memcpy(http->username, ptr+pos+19, i-19);									
 								http->login = true;
+								http->interf = S3_i;
 								return http;
 						}
+SWIFT_LOGIN:
+						//swift login
+						pos += 25;
+
+				
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "x-auth-user: ");
+						if(res == -1)
+								return http;
+						pos += res + 13;
+
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						if(res == -1)
+								return http;
+						memcpy(http->username, ptr + pos, res);
+						pos += res + 2;
+
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "x-auth-key: ");
+						if(res == -1)
+								return http;
+						pos += res + 12;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						memcpy(http->password, ptr + pos, res);
+						http->login = true;
+						http->interf = swift;
+						return http;
+						
+SWIFT_PUT:
+						pos += 3;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
+						if(res == -1)
+								return http;
+						pos += res + 14;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						memcpy(http->auth_token, ptr + pos, res);
+						http->put_content == true;
+
+						pos += res + 2;	
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+						if(res == -1)
+								return http;
+						pos += 4 + res;			
+						if(swp->hw_wqe.len - pos > 0)
+						{
+								http->there_is_data = true;
+								http->pos = pos;
+						}
+						http->interf = swift;
+						return http;
+SWIFT_GET:
+						pos += 3;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
+						if(res == -1)
+								return http;
+						pos += res + 14;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						memcpy(http->auth_token, ptr + pos, res);
+						http->get_content == true;
+						http->interf = swift;
+						return http;
+
+						
 				}
 				else if(status == S2)
 				{
@@ -487,6 +569,30 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						if(res == -1)
 								return http;			
 						pos += res + 10;
+						//case for swift
+						res = StrFind(ptr+pos, 20, "X-Auth-Token: ");
+						if(res != -1){
+							pos += res + 14;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res);
+							http->put_content == true;
+
+							pos += res + 2;	
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+							if(res == -1)
+								return http;
+							pos += 4 + res;			
+							if(swp->hw_wqe.len - pos > 0)
+							{
+								http->there_is_data = true;
+								http->pos = pos;
+							}
+							http->interf = swift;
+							return http;
+
+						}
+
+						//case for S3
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
 						http->put_content = true;
 						if(res == -1)
@@ -495,9 +601,10 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						if(swp->hw_wqe.len - pos > 0)
 						{
 								http->there_is_data = true;
-								printf("swp->hw_wqe.len: %d  pos: %d\n",swp->hw_wqe.len ,pos);
+								//printf("swp->hw_wqe.len: %d  pos: %d\n",swp->hw_wqe.len ,pos);
 								http->pos = pos;
 						}
+						http->interf = S3_i;
 						return http;
 				}
 				/*
@@ -521,8 +628,65 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						res = StrFind(ptr+pos, 17, "HTTP/1.1 200 OK\r\n");							
 						if(res == -1)
 								return http;
+						//case for swift
+						pos += res + 17;
+						res = StrFind(ptr+pos, 20, "X-Auth-Token: ");
+						if(res != -1){
+							pos += res + 14;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res);
+							
+							http->interf = swift;
+							http->login_done = true;
+							return http;
+
+						}
+
+						//case for S3
+						http->interf = S3_i;
 						http->login_done = true;
 						return http;							
+				}
+				else if (status == S0)
+				{
+					//case for swift get content
+					//17 is the length of "HTTP/1.1 200 OK\r\n"
+						res = StrFind(ptr+pos, 17, "HTTP/1.1 200 OK\r\n");
+						if(res == -1)
+								return http;
+						pos += 17;
+
+						//cut 3 lines to find Etag 
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						if(res == -1)
+								return http;
+						pos += res+2;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						if(res == -1)
+								return http;
+						pos += res+2;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						if(res == -1)
+								return http;
+						pos += res+2;
+
+						res = StrFind(ptr+pos, 4, "Etag");
+						if(res == -1)
+								return http;			
+						
+						http->get_content = true;
+						http->interf = swift;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+						if(res == -1)
+								return http;
+						pos += 4 + res;			
+						if(swp->hw_wqe.len - pos > 0)
+						{
+								http->there_is_data = true;
+								http->pos = pos;
+						}
+						return http;
+
 				}
 				else if(status == S2)
 				{
@@ -532,6 +696,43 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 								return http;
 						pos += 17;
 
+						res = StrFind(ptr+pos, 16, "Content-Length: ");
+						if (res != -1)
+						{
+							//case for swift get content
+							//cut 3 lines to find Etag 
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							if(res == -1)
+								return http;
+							pos += res+2;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							if(res == -1)
+								return http;
+							pos += res+2;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							if(res == -1)
+								return http;
+							pos += res+2;
+
+							res = StrFind(ptr+pos, 4, "Etag");
+							if(res == -1)
+								return http;			
+						
+							http->get_content = true;
+							http->interf = swift;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+							if(res == -1)
+								return http;
+							pos += 4 + res;			
+							if(swp->hw_wqe.len - pos > 0)
+							{
+								http->there_is_data = true;
+								http->pos = pos;
+							}
+							return http;
+						}
+
+						//case for S3 get content
 						//cut a line to find Auth
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
 						if(res == -1)
@@ -553,6 +754,8 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 								return http;			
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
 						http->get_content = true;
+						//case for S3
+						http->interf = S3_i;
 						if(res == -1)
 								return http;
 						pos += 4 + res;			
@@ -567,9 +770,21 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 				{
 						//17 is the length of "HTTP/1.1 200 OK\r\n"
 						res = StrFind(ptr+pos, 17, "HTTP/1.1 200 OK\r\n");
-						if(res == -1)
+						if(res == -1){
+							res = StrFind(ptr+pos, 22, "HTTP/1.1 201 Created\r\n");
+							if (res != -1)
+							{
+								//case for swift
+								http->put_done = true;
+								http->interf = swift;
 								return http;
+							}else
+								return http;
+						}
+						
+						//case for S3		
 						http->put_done = true;
+						http->interf = S3_i;
 						return http;	
 				}
 				else if(status == S4)
@@ -578,6 +793,8 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						res = StrFind(ptr+pos, 8, "HTTP/1.1");
 						if(res == -1)
 								return http;
+						//case for S3
+						http->interf = S3_i;
 						http->get_done = true;
 						return http;	
 				}
@@ -604,6 +821,30 @@ void encryption(uint8_t * enc_map, cvm_common_wqe_t * swp, uint32_t pos)
 		}
 }
 
+int set_enc_map(list1_entry_t *list1, interface interf){
+	
+	if (interf == S3_i)
+	{
+		hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
+	}else if (interf == swift)
+	{
+		hash_md5(list1->secret_key, (uint8_t*)list1->auth_token, strlen(list1->auth_token));
+	}
+	
+
+	uint8_t tmp[256];
+	RC4_KEY rkey;
+	int i=0;
+	for(i=0;i<256;i++)
+		tmp[i]=i;
+	for(i=0;i<256;i++)
+	{
+		RC4_set_key (&rkey, 16, list1->secret_key);
+		RC4 (&rkey, 1, tmp+i, list1->enc_map+i);						
+	}
+	return 0;
+}
+
 int process_handle(cvm_common_wqe_t * swp)
 {
 		if(cvmx_get_cycle() - mytime > 8000000000)
@@ -624,21 +865,10 @@ int process_handle(cvm_common_wqe_t * swp)
 		int header_len = th->th_off << 2;//length of Tcp header	
 
 
-		//printf("%X  print packet:\n", swp->hw_wqe.tag);
-		int n = 0;
-		while(n < 10)
-		{
-		// 	printf("%c", *(ptr+54+n));
-			n++;
-		}
-		//printf("\n");
 		int res = 1;
 		list1_entry_t * list1 = list1_lookup(swp);
 		if(list1 != NULL)
 		{
-				//printf("in list1 \n");
-
-
 				//如果为拆链接数据包，则需要删除相应规则列表项
 				if(th->th_flags & 0x05)// fin is 0x01; rst is 0x04
 				{			
@@ -666,60 +896,37 @@ int process_handle(cvm_common_wqe_t * swp)
 				if(http_entry->is_http)
 				{
 						//服务器回复登录确认，说明用户成功登录			
-						if(list1->status == S1)
+						if(list1->status == S1 && http_entry->interf == S3_i)
 						{
 								if(http_entry->login_done == true)
-								{
-										/*
-										   if(list2_lookup(list1) == NULL)
-										   {
-										   list2_entry_t * list2 = make_list2_entry(list1);
-										//TODO get_secretkey() needs to connect to keys server
-										//list2->secret_key = get_secretkey(list1->username);
-										hash_md5(list2->secret_key, (uint8_t*)list1->username, strlen(list1->username));
-
-										uint8_t tmp[256];
-										RC4_KEY rkey;
-										int i=0;
-										for(i=0;i<256;i++)
-										tmp[i]=i;
-										for(i=0;i<256;i++)
-										{
-										RC4_set_key (&rkey, 16, key);
-										RC4 (&rkey, 1, tmp+i, list2->enc_map+i);						
-										}	
-										memcpy(list1->enc_map, list2->enc_map, 16);				
-										list2->list1_links = 1;
-										//TODO tag2 = md5 sum
-										uint32_t * ptr = (uint32_t *)list2->secret_key;
-										list2->tag2 = ptr[0] + ptr[1] + ptr[2] + ptr[3];
-										list2->label = 2;
-										}*/
-										printf("login_done \n");
-										hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
-
-										uint8_t tmp[256];
-										RC4_KEY rkey;
-										int i=0;
-										for(i=0;i<256;i++)
-												tmp[i]=i;
-										for(i=0;i<256;i++)
-										{
-												RC4_set_key (&rkey, 16, list1->secret_key);
-												RC4 (&rkey, 1, tmp+i, list1->enc_map+i);						
-										}					
-										list1->status = S2;
+								{	
+									printf("login_done \n");
+									set_enc_map(list1, S3_i);				
+									list1->status = S2;
 								}
 								cvm_common_free_fpa_buffer ((void*)http_entry, CVMX_FPA_PACKET_POOL, CVMX_FPA_PACKET_POOL_SIZE / CVMX_CACHE_LINE_SIZE);
 								http_entry = NULL;
 								return res;
 						}
 
+						if (list1->status == S1 && http_entry->interf == swift)
+						{
+							if (http_entry->login_done == true)
+							{
+								memcpy(list1->auth_token, http_entry->auth_token, 128);
+								set_enc_map(list1, S3_i);				
+								list1->status = S2;
+							}
+							cvm_common_free_fpa_buffer ((void*)http_entry, CVMX_FPA_PACKET_POOL, CVMX_FPA_PACKET_POOL_SIZE / CVMX_CACHE_LINE_SIZE);
+							http_entry = NULL;
+							return res;
+						}
+
 						//用户发送上传数据命令put
 						if(list1->status == S2)
 						{
 								//Clietn->Server
-								if(http_entry->put_content == true)
+								if(http_entry->put_content == true && http_entry->interf == S3_i)
 								{
 										printf("put content \n");
 										list1->status = S3;//将list1结构体的状态设置为数据上传S3
@@ -741,6 +948,14 @@ int process_handle(cvm_common_wqe_t * swp)
 												encryption(list1->enc_map, swp, http_entry->pos);
 												res = 0;
 										}
+								}else if (http_entry->put_content == true && http_entry->interf == swift)
+								{
+									list1->status = S3;
+									if (http_entry->there_is_data)
+									{
+										encryption(list1->enc_map, swp, http_entry->pos);
+										res = 0;
+									}
 								}
 								//Server->Client
 								else if(http_entry->get_content == true)
@@ -799,45 +1014,10 @@ int process_handle(cvm_common_wqe_t * swp)
 				http_entry = http_parse(swp, S0);
 				if(http_entry->is_http == true)
 				{
-						if(http_entry->login == true)//用户创建新链接时发送
+						if(http_entry->login == true && http_entry->interf == S3_i)//S3用户创建新链接时发送
 						{
 								printf("login\n");
 								list1_entry_t * list1 = make_list1_entry(swp);
-								/*
-								if(list1 != NULL)
-								 	printf("after make  list1 != NULL\n");
-								 else
-								 	printf("after make  list1 == NULL\n");
-
-
-
-
-								 list1 = list1_lookup(swp);
-								 if(list1 != NULL)
-								 	printf("after lookup  list1 != NULL\n");
-								 else
-								 	printf("after lookup list1 == NULL\n");
-								
-								 list1_discard_lookup_entry(swp);
-								 list1 = list1_lookup(swp);	
-								 if(list1 != NULL)
-										 printf("after discard  list1 != NULL\n");
-								 else
-										 printf("after discard list1 == NULL\n");
-
-								 list1 = make_list1_entry(swp);
-								 if(list1 != NULL)
-										 printf("after make again list1 != NULL\n");
-								 else
-										 printf("after make again list1 == NULL\n");
-
-								
-								 list1 = list1_lookup(swp);
-								 if(list1 != NULL)
-								 	printf("after lookup again list1 != NULL\n");
-								 else
-								 	printf("after lookup again list1 == NULL\n");
-								*/
 
 								/*
 								   填写list1结构体的数据部分 
@@ -852,6 +1032,57 @@ int process_handle(cvm_common_wqe_t * swp)
 										list1->outport = list1->inport - portnum;
 								else
 										list1->outport = list1->inport + portnum;
+						}else if(http_entry->login == true && http_entry->interf == swift)
+						{
+							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->tag1 = swp->hw_wqe.tag;
+							memcpy(list1->username, http_entry->username, 128);
+							memcpy(list1->password, http_entry->password, 128);
+							list1->status = S1;
+							list1->inport = swp->hw_wqe.ipprt;
+							if( list1->inport >= portbase + portnum)
+									list1->outport = list1->inport - portnum;
+							else
+									list1->outport = list1->inport + portnum;
+
+						}else if(http_entry->put_content == true && http_entry->interf == swift)
+						{
+							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->tag1 = swp->hw_wqe.tag;
+							memcpy(list1->auth_token, http_entry->auth_token, 128);
+							list1->inport = swp->hw_wqe.ipprt;
+							if( list1->inport >= portbase + portnum)
+								list1->outport = list1->inport - portnum;
+							else
+								list1->outport = list1->inport + portnum;
+
+							set_enc_map(list1, swift);
+
+							printf("put content \n");
+							list1->status = S3;//将list1结构体的状态设置为数据上传S3
+							if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
+							{
+								printf("put content, encrypt first packet\n");
+											
+								encryption(list1->enc_map, swp, http_entry->pos);
+								res = 0;
+							}
+						}else if(http_entry->get_content == true && http_entry->interf == swift)
+						{
+							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->tag1 = swp->hw_wqe.tag;
+							memcpy(list1->auth_token, http_entry->auth_token, 128);
+							list1->status = S2;
+							list1->inport = swp->hw_wqe.ipprt;
+							if( list1->inport >= portbase + portnum)
+									list1->outport = list1->inport - portnum;
+							else
+									list1->outport = list1->inport + portnum;
+
+							set_enc_map(list1, swift);
+
+
+
 						}
 
 				}
@@ -859,7 +1090,6 @@ int process_handle(cvm_common_wqe_t * swp)
 				return res;
 		}
 } 
-
 
 
 

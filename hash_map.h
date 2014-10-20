@@ -28,7 +28,7 @@
 // lookup
 #include "cvm-ip.h"
 #include "cvmx-asm.h"
-#include "cvm-tcp-fast.h" 
+#include "cvm-tcp-fast.h"   
 
 #define portbase 6
 
@@ -60,6 +60,8 @@ typedef struct list1_entry{
 
   	uint32_t tag1; //由TCP5元组计算得到，用于索引list1_entry。
 	uint8_t username[128]; //用户名，可通过解析用户发来的http数据包的Authorization位得到。
+	uint8_t password[128];
+	uint8_t auth_token[128];
 	uint32_t tag2; //由MD5计算得到，用于索引list2_entry.
 	uint16_t inport; //接收数据包的端口。
 	uint16_t outport; //转发数据包的端口。
