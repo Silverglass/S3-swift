@@ -48,6 +48,14 @@ typedef struct cvm_tcp_lookup_block {
   uint16_t reserved2;
 } cvm_tcp_lookup_block_t;
 */
+
+
+typedef enum{
+		S3_i,
+		swift,
+		unknown
+} interface;
+
 typedef enum {
 	S0,
 	S1,
@@ -66,6 +74,7 @@ typedef struct list1_entry{
 	uint16_t inport; //接收数据包的端口。
 	uint16_t outport; //转发数据包的端口。
 	State status; //该条TCP链接当前的状态（加密/解密/不做处理）
+	interface interf;
 	uint8_t secret_key[16]; //用户的密钥。//由username计算得到, example/crypto.cs
 	uint8_t enc_map[256];
 	uint8_t label;

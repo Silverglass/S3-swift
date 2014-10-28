@@ -380,10 +380,6 @@ int inic_data_local_init(void)
 		return 0;
 }
 
-typedef enum{
-	S3_i,
-	swift
-} interface;
 
 typedef struct http_data_t
 {
@@ -396,6 +392,8 @@ typedef struct http_data_t
 		bool put_content;
 		bool get_done;
 		bool put_done;
+		bool head_first;
+		bool get_first;
 		uint32_t  pos;//指向需要加解密的数据的起始位置 
 		uint8_t username[128];// Authorization： AWS username:XXX   2 
 		uint8_t password[128];//password for swift
@@ -419,7 +417,7 @@ int StrFind(char * ptr, int length, char * str)
 		return -1;
 }
 
-http_data * http_parse(cvm_common_wqe_t * swp, State status)
+http_data * http_parse(cvm_common_wqe_t * swp, State status, interface interf)
 {
 		http_data * http = (http_data *) cvmx_phys_to_ptr(cvm_common_alloc_fpa_buffer_sync(CVMX_FPA_PACKET_POOL));
 		if(http == NULL)
@@ -455,11 +453,15 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status)
 						}else if (StrFind(ptr+pos, 3, "GET") != -1)//to tell whether it is swift get?
 						{
 							goto SWIFT_GET;
-						}else return http;
+						}else if (StrFind(ptr+pos, 4, "HEAD") != -1)
+						{
+							goto SWIFT_HEAD;
+						}
+						else return http;
 
 S3_LOGIN:
 						//S3 login		
-						//printf("GET / HTTP/1.1	%d\n", res);
+						//printf("http parse %d\n", res);
 						pos += 16;
 
 						//cut a line to find Auth
@@ -484,7 +486,7 @@ S3_LOGIN:
 						//19 is the length of "Authorization: AWS "
 						//printf("%X,		%X,		%d\n", http->username, ptr, i);
 						//printf("%d\n", swp->hw_wqe.len);
-						res = StrFind(ptr+pos, 19, "Authorization: AWS ");
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Authorization: AWS ");
 						if(i < 0 || res == -1)
 						{
 								//memset(http, 0, sizeof(http_data));
@@ -499,6 +501,7 @@ S3_LOGIN:
 						}
 SWIFT_LOGIN:
 						//swift login
+						//printf("http parse swift login\n");
 						pos += 25;
 
 				
@@ -521,9 +524,11 @@ SWIFT_LOGIN:
 						memcpy(http->password, ptr + pos, res);
 						http->login = true;
 						http->interf = swift;
+						printf("http parse swift login\n");
 						return http;
 						
 SWIFT_PUT:
+						//printf("http parse swift put\n");
 						pos += 3;
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
 						if(res == -1)
@@ -543,9 +548,11 @@ SWIFT_PUT:
 								http->there_is_data = true;
 								http->pos = pos;
 						}
+						printf("http parse swift put in S0\n");
 						http->interf = swift;
 						return http;
 SWIFT_GET:
+						//printf("http parse swift get\n");
 						pos += 3;
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
 						if(res == -1)
@@ -553,7 +560,20 @@ SWIFT_GET:
 						pos += res + 14;
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
 						memcpy(http->auth_token, ptr + pos, res);
-						http->get_content == true;
+						http->get_first = true;
+						printf("http parse swift get_first\n");
+						http->interf = swift;
+						return http;
+SWIFT_HEAD:
+						pos += 4;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
+						if(res == -1)
+								return http;
+						pos += res + 14;
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+						memcpy(http->auth_token, ptr + pos, res);
+						http->head_first = true;//http HEAD is the first packet in this TCP link and the client is already logged in
+						printf("Head first in S0\n");
 						http->interf = swift;
 						return http;
 
@@ -570,12 +590,13 @@ SWIFT_GET:
 								return http;			
 						pos += res + 10;
 						//case for swift
-						res = StrFind(ptr+pos, 20, "X-Auth-Token: ");
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
 						if(res != -1){
+							//printf("http parse swift put in S2\n");
 							pos += res + 14;
 							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
 							memcpy(http->auth_token, ptr + pos, res);
-							http->put_content == true;
+							http->put_content = true;
 
 							pos += res + 2;	
 							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
@@ -588,11 +609,13 @@ SWIFT_GET:
 								http->pos = pos;
 							}
 							http->interf = swift;
+							printf("http parse swift put in S2\n");
 							return http;
 
 						}
 
 						//case for S3
+						printf("http parse S3 put in S2\n");
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
 						http->put_content = true;
 						if(res == -1)
@@ -630,19 +653,22 @@ SWIFT_GET:
 								return http;
 						//case for swift
 						pos += res + 17;
-						res = StrFind(ptr+pos, 20, "X-Auth-Token: ");
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
 						if(res != -1){
+							//printf("http parse login done for swift\n");
 							pos += res + 14;
 							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
 							memcpy(http->auth_token, ptr + pos, res);
 							
 							http->interf = swift;
 							http->login_done = true;
+							printf("http parse login done for swift in S1\n");
 							return http;
 
 						}
 
-						//case for S3
+						//case for S3a
+						printf("http parse login done for S3 in S1\n");
 						http->interf = S3_i;
 						http->login_done = true;
 						return http;							
@@ -670,11 +696,12 @@ SWIFT_GET:
 								return http;
 						pos += res+2;
 
-						res = StrFind(ptr+pos, 4, "Etag");
+						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Etag");
 						if(res == -1)
 								return http;			
 						
 						http->get_content = true;
+						printf("http parse get content for swift from S0\n");
 						http->interf = swift;
 						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
 						if(res == -1)
@@ -696,11 +723,13 @@ SWIFT_GET:
 								return http;
 						pos += 17;
 
-						res = StrFind(ptr+pos, 16, "Content-Length: ");
-						if (res != -1)
+						if (interf == swift)
 						{
 							//case for swift get content
 							//cut 3 lines to find Etag 
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Content-Length: ");
+							if(res == -1)
+								return http;
 							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
 							if(res == -1)
 								return http;
@@ -714,11 +743,12 @@ SWIFT_GET:
 								return http;
 							pos += res+2;
 
-							res = StrFind(ptr+pos, 4, "Etag");
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Etag");
 							if(res == -1)
 								return http;			
 						
 							http->get_content = true;
+							printf("get content for swift from S2\n");
 							http->interf = swift;
 							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
 							if(res == -1)
@@ -731,40 +761,43 @@ SWIFT_GET:
 							}
 							return http;
 						}
-
-						//case for S3 get content
-						//cut a line to find Auth
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
-						if(res == -1)
-								return http;
-						pos += res+2;
-						//Find Content-Length
-						res = StrFind(ptr+pos, 16, "Content-Length: ");
-						if(res == -1)
-								return http;
-						pos += 16;
-						if(ptr[pos] == '0')
-								return http;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
-						if(res == -1)
-								return http;
-						pos += res+2;
-						res = StrFind(ptr+pos, 4, "Etag");
-						if(res == -1)
-								return http;			
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
-						http->get_content = true;
-						//case for S3
-						http->interf = S3_i;
-						if(res == -1)
-								return http;
-						pos += 4 + res;			
-						if(swp->hw_wqe.len - pos > 0)
+						if(interf == S3_i)
 						{
-								http->there_is_data = true;
-								http->pos = pos;
+								//case for S3 get content
+								//cut a line to find Auth
+								res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+								if(res == -1)
+										return http;
+								pos += res+2;
+								//Find Content-Length
+								res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Content-Length: ");
+								if(res == -1)
+										return http;
+								pos += 16;
+								if(ptr[pos] == '0')
+										return http;
+								res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+								if(res == -1)
+										return http;
+								pos += res+2;
+								res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Etag");
+								if(res == -1)
+										return http;			
+								res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+								http->get_content = true;
+								//case for S3
+								printf("get content for S3 \n");
+								http->interf = S3_i;
+								if(res == -1)
+										return http;
+								pos += 4 + res;			
+								if(swp->hw_wqe.len - pos > 0)
+								{
+										http->there_is_data = true;
+										http->pos = pos;
+								}
+								return http;	
 						}
-						return http;			
 				}
 				else if(status == S3)
 				{
@@ -776,6 +809,7 @@ SWIFT_GET:
 							{
 								//case for swift
 								http->put_done = true;
+								printf("put done for swift\n");
 								http->interf = swift;
 								return http;
 							}else
@@ -784,6 +818,7 @@ SWIFT_GET:
 						
 						//case for S3		
 						http->put_done = true;
+						printf("put done for S3\n");
 						http->interf = S3_i;
 						return http;	
 				}
@@ -795,6 +830,7 @@ SWIFT_GET:
 								return http;
 						//case for S3
 						http->interf = S3_i;
+						printf("get done for S3\n");
 						http->get_done = true;
 						return http;	
 				}
@@ -891,7 +927,7 @@ int process_handle(cvm_common_wqe_t * swp)
 
 				//非拆链接数据包
 				http_data * http_entry = NULL;
-				http_entry = http_parse(swp, list1->status);
+				http_entry = http_parse(swp, list1->status, list1->interf);
 				//检查是否为http协议数据包
 				if(http_entry->is_http)
 				{
@@ -928,11 +964,11 @@ int process_handle(cvm_common_wqe_t * swp)
 								//Clietn->Server
 								if(http_entry->put_content == true && http_entry->interf == S3_i)
 								{
-										printf("put content \n");
+										printf("put content in S2 S3 \n");
 										list1->status = S3;//将list1结构体的状态设置为数据上传S3
 										if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
 										{
-												printf("put content, encrypt first packet\n");
+												printf("put content, encrypt first packet in S2 S3\n");
 												/*
 												int i = 0;
 												char * ptrp = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr); 
@@ -950,9 +986,11 @@ int process_handle(cvm_common_wqe_t * swp)
 										}
 								}else if (http_entry->put_content == true && http_entry->interf == swift)
 								{
+									printf("put content in S2 swift \n");
 									list1->status = S3;
 									if (http_entry->there_is_data)
 									{
+										printf("put content, encrypt first packet in S2 swift\n");
 										encryption(list1->enc_map, swp, http_entry->pos);
 										res = 0;
 									}
@@ -1011,7 +1049,7 @@ int process_handle(cvm_common_wqe_t * swp)
 				//printf("not in list1\n");
 				//是否为服务器与客户端之间的新建链接
 				http_data * http_entry;
-				http_entry = http_parse(swp, S0);
+				http_entry = http_parse(swp, S0, unknown);
 				if(http_entry->is_http == true)
 				{
 						if(http_entry->login == true && http_entry->interf == S3_i)//S3用户创建新链接时发送
@@ -1022,6 +1060,7 @@ int process_handle(cvm_common_wqe_t * swp)
 								/*
 								   填写list1结构体的数据部分 
 								 */
+								list1->interf = http_entry->interf;
 								list1->tag1 = swp->hw_wqe.tag;
 								memcpy(list1->username, http_entry->username, 128);
 
@@ -1035,6 +1074,7 @@ int process_handle(cvm_common_wqe_t * swp)
 						}else if(http_entry->login == true && http_entry->interf == swift)
 						{
 							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->interf = http_entry->interf;
 							list1->tag1 = swp->hw_wqe.tag;
 							memcpy(list1->username, http_entry->username, 128);
 							memcpy(list1->password, http_entry->password, 128);
@@ -1048,6 +1088,7 @@ int process_handle(cvm_common_wqe_t * swp)
 						}else if(http_entry->put_content == true && http_entry->interf == swift)
 						{
 							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->interf = http_entry->interf;
 							list1->tag1 = swp->hw_wqe.tag;
 							memcpy(list1->auth_token, http_entry->auth_token, 128);
 							list1->inport = swp->hw_wqe.ipprt;
@@ -1058,18 +1099,19 @@ int process_handle(cvm_common_wqe_t * swp)
 
 							set_enc_map(list1, swift);
 
-							printf("put content \n");
+							printf("put content in S0 swift\n");
 							list1->status = S3;//将list1结构体的状态设置为数据上传S3
 							if(http_entry->there_is_data)//如果包含数据部分，则对数据进行加密，否则直接返回
 							{
-								printf("put content, encrypt first packet\n");
+								printf("put content, encrypt first packet in S0 swift \n");
 											
 								encryption(list1->enc_map, swp, http_entry->pos);
 								res = 0;
 							}
-						}else if(http_entry->get_content == true && http_entry->interf == swift)
+						}else if(http_entry->get_first == true && http_entry->interf == swift)
 						{
 							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->interf = http_entry->interf;
 							list1->tag1 = swp->hw_wqe.tag;
 							memcpy(list1->auth_token, http_entry->auth_token, 128);
 							list1->status = S2;
@@ -1083,6 +1125,21 @@ int process_handle(cvm_common_wqe_t * swp)
 
 
 
+						}else if(http_entry->head_first == true && http_entry->interf == swift)
+						{
+								list1_entry_t * list1 = make_list1_entry(swp);
+								list1->interf = http_entry->interf;
+								list1->tag1 = swp->hw_wqe.tag;
+								memcpy(list1->auth_token, http_entry->auth_token, 128);
+								printf("after head_first   set S2\n");
+								list1->status = S2;
+								list1->inport = swp->hw_wqe.ipprt;
+								if( list1->inport >= portbase + portnum)
+										list1->outport = list1->inport - portnum;
+								else
+										list1->outport = list1->inport + portnum;
+
+								set_enc_map(list1, swift);
 						}
 
 				}
