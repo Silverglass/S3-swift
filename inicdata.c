@@ -88,6 +88,7 @@
 
 #include "inic.h"
 #include "hash_map.h"
+#include "hili_send_module.h"
 #include <stdbool.h>
 #include <openssl/rc4.h>
 
@@ -185,6 +186,8 @@ void S3_send_packet(cvmx_wqe_t * work)
 
 int inic_data_global_init(void)
 {
+
+		send_log_init();
 		int i,iface;
 		char xname[4];
 
@@ -387,7 +390,7 @@ typedef struct http_data_t
 		bool is_http;
 		bool login;
 		bool login_done;
-		bool there_is_data;//httpåŒ…ä¸­çº¯æ•°æ®éƒ¨åˆ†åº”è¯¥ä»Ž\r\n\r\nä¹‹åŽå¼€å§‹ï¼Œè‹¥è¯¥æ•°æ®åŒ…ä¸­å« \r\n\r\nï¼Œå¹¶ä¸”ä¹‹åŽæœ‰æ•°æ®ï¼Œåˆ™there_is_data = true,å¹¶è®°ä¸‹æ•°æ®èµ·å§‹ä½ç½® 
+		bool there_is_data;//httpåŒ…ä¸­çº¯æ•°æ®éƒ¨åˆ†åº”è¯¥ä»Ž\r\n\r\nä¹‹åŽå¼€å§‹ï¼Œè‹¥è¯¥æ•°æ®åŒ…ä¸­å?\r\n\r\nï¼Œå¹¶ä¸”ä¹‹åŽæœ‰æ•°æ®ï¼Œåˆ™there_is_data = true,å¹¶è®°ä¸‹æ•°æ®èµ·å§‹ä½ç½?
 		bool get_content;
 		bool put_content;
 		bool get_done;
@@ -395,7 +398,7 @@ typedef struct http_data_t
 		bool head_first;
 		bool get_first;
 		uint32_t  pos;//æŒ‡å‘éœ€è¦åŠ è§£å¯†çš„æ•°æ®çš„èµ·å§‹ä½ç½® 
-		uint8_t username[128];// Authorizationï¼š AWS username:XXX   2 
+		uint8_t username[128];// Authorizationï¼?AWS username:XXX   2 
 		uint8_t password[128];//password for swift
 		uint8_t auth_token[128];//X-Auth-Token for openstack swift usually 47 chars
 } http_data;
@@ -449,13 +452,13 @@ http_data * http_parse(cvm_common_wqe_t * swp, State status, interface interf)
 							goto SWIFT_LOGIN;
 						}else if (StrFind(ptr+pos, 3, "PUT") != -1)//to tell whether it is swift put?
 						{
-							goto SWIFT_PUT;
+							goto _PUT;
 						}else if (StrFind(ptr+pos, 3, "GET") != -1)//to tell whether it is swift get?
 						{
-							goto SWIFT_GET;
+							goto _GET;
 						}else if (StrFind(ptr+pos, 4, "HEAD") != -1)
 						{
-							goto SWIFT_HEAD;
+							goto _HEAD;
 						}
 						else return http;
 
@@ -499,6 +502,7 @@ S3_LOGIN:
 								http->interf = S3_i;
 								return http;
 						}
+			
 SWIFT_LOGIN:
 						//swift login
 						//printf("http parse swift login\n");
@@ -526,58 +530,105 @@ SWIFT_LOGIN:
 						http->interf = swift;
 						printf("http parse swift login\n");
 						return http;
-						
-SWIFT_PUT:
+_PUT:						
 						//printf("http parse swift put\n");
 						pos += 3;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
-						if(res == -1)
-								return http;
-						pos += res + 14;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
-						memcpy(http->auth_token, ptr + pos, res);
-						http->put_content == true;
-
-						pos += res + 2;	
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
-						if(res == -1)
-								return http;
-						pos += 4 + res;			
-						if(swp->hw_wqe.len - pos > 0)
+						if(-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ")))
 						{
-								http->there_is_data = true;
-								http->pos = pos;
-						}
-						printf("http parse swift put in S0\n");
-						http->interf = swift;
-						return http;
-SWIFT_GET:
-						//printf("http parse swift get\n");
-						pos += 3;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
-						if(res == -1)
-								return http;
-						pos += res + 14;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
-						memcpy(http->auth_token, ptr + pos, res);
-						http->get_first = true;
-						printf("http parse swift get_first\n");
-						http->interf = swift;
-						return http;
-SWIFT_HEAD:
-						pos += 4;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
-						if(res == -1)
-								return http;
-						pos += res + 14;
-						res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
-						memcpy(http->auth_token, ptr + pos, res);
-						http->head_first = true;//http HEAD is the first packet in this TCP link and the client is already logged in
-						printf("Head first in S0\n");
-						http->interf = swift;
-						return http;
+							pos += res + 14;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res);
+							http->put_content == true;
 
-						
+							pos += res + 2;	
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+							if(res == -1)
+									return http;
+							pos += 4 + res;			
+							if(swp->hw_wqe.len - pos > 0)
+							{
+									http->there_is_data = true;
+									http->pos = pos;
+							}
+							printf("http parse swift put in S0\n");
+							http->interf = swift;
+							return http;
+						}
+						else if (-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Authorization: AWS ")))
+						{
+							pos += res + 19;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res); 
+							http->put_content == true;
+
+							pos += res + 2;	
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+							if(res == -1)
+									return http;
+							pos += 4 + res;			
+							if(swp->hw_wqe.len - pos > 0)
+							{
+									http->there_is_data = true;
+									http->pos = pos;
+							}
+							printf("http parse S3 put in S0\n");
+							http->interf = S3_i;
+							return http;
+						}
+						else
+								return http;
+
+_GET:
+						pos += 3;
+						if(-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ")))
+						{
+							// printf("http parse swift get\n");
+							pos += res + 14;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res);
+							http->get_first = true;
+							printf("http parse swift get_first\n");
+							http->interf = swift;
+							return http;
+						}
+						else if (-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Authorization: AWS ")))
+						{
+							pos += res + 19;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res); 
+							http->get_first == true;
+							printf("http parse S3 get_first\n");
+							http->interf = S3_i;
+							return http;
+						}
+						else
+								return http;
+
+_HEAD:
+						pos += 4;
+						if(-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ")))
+						{
+							// printf("http parse swift get\n");
+							pos += res + 14;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res);
+							http->head_first = true;
+							printf("http parse swift head_first\n");
+							http->interf = swift;
+							return http;
+						}
+						else if (-1 != (res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "Authorization: AWS ")))
+						{
+							pos += res + 19;
+							res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							memcpy(http->auth_token, ptr + pos, res); 
+							http->head_first == true;
+							printf("http parse S3 head_first\n");
+							http->interf = S3_i;
+							return http;
+						}
+						else
+								return http;	
 				}
 				else if(status == S2)
 				{
@@ -636,6 +687,67 @@ SWIFT_HEAD:
 						printf("Waring:Client->Server, State is %d\n", status);
 				} 
 				*/
+				else if(status == S4)
+				{
+				        http->get_done= true;
+						if(StrFind(ptr+pos, 3, "PUT")!=-1)
+						{
+						  pos += 3;
+						  res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "HTTP/1.1\r\n");
+						  if(res == -1)
+								return http;			
+						  pos += res + 10;
+						  //case for swift
+						  if(http->interf==swift)
+						  {
+						    res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "X-Auth-Token: ");
+						    if(res != -1)
+						    {
+							   //printf("http parse swift put in S2\n");
+							   pos += res + 14;
+							   res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n");
+							   memcpy(http->auth_token, ptr + pos, res);
+							   http->put_content = true;
+
+							   pos += res + 2;	
+							   res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+							   if(res == -1)
+								    return http;
+							   pos += 4 + res;			
+							   if(swp->hw_wqe.len - pos > 0)
+							   {
+								    http->there_is_data = true;
+								    http->pos = pos;
+							   }
+							   http->interf = swift;
+							   printf("http parse swift put in S4\n");
+							   return http;
+						    }
+						  }
+						  //case for S3
+						  else if(http->interf==S3_i)
+						  {
+						    printf("http parse S3 put in S4\n");
+						    res = StrFind(ptr+pos, swp->hw_wqe.len-pos, "\r\n\r\n");
+						    http->put_content = true;
+						    if(res == -1)
+								return http;
+						    pos += 4 + res;			
+						    if(swp->hw_wqe.len - pos > 0)
+						    {
+								http->there_is_data = true;
+								//printf("swp->hw_wqe.len: %d  pos: %d\n",swp->hw_wqe.len ,pos);
+								http->pos = pos;
+						    }
+						    http->interf = S3_i;
+						    return http;
+						  }
+					    }
+					   printf("http parse get_done in S4\n");
+					   http->get_done=true;
+					   return http;
+				}
+						
 		}
 		//Server->Client
 		else
@@ -822,7 +934,7 @@ SWIFT_HEAD:
 						http->interf = S3_i;
 						return http;	
 				}
-				else if(status == S4)
+			/*	else if(status == S4)
 				{
 						//8 is the length of "HTTP/1.1"
 						res = StrFind(ptr+pos, 8, "HTTP/1.1");
@@ -833,7 +945,7 @@ SWIFT_HEAD:
 						printf("get done for S3\n");
 						http->get_done = true;
 						return http;	
-				}
+				}*/
 				/*
 				else if(status != S0)
 				{
@@ -881,14 +993,47 @@ int set_enc_map(list1_entry_t *list1, interface interf){
 	return 0;
 }
 
+
+int send_log_init(){
+	uint64_t dst_mac = 0x842B2B50F525;//0x0022196337AF;
+    uint8_t send_port = 11;
+    hili_send_module_init(dst_mac, send_port);
+    return 0;
+}
+
+int send_log(void * ptr_c, uint16_t len){
+	void *ptr = hili_send_module_fpa_alloc();
+	if(ptr == NULL)
+    {
+        printf("send_log Error: ptr == NULL \n");
+        return -1;
+    }
+    
+    memcpy(ptr, ptr_c, len);
+
+    hili_send_packet_conf_t hili_send_packet_conf;
+    hili_send_packet_conf.src_port = 19000;
+    hili_send_packet_conf.dst_port = 18100;
+    hili_send_packet_conf.src_ip = 0xc0a812e1; //192.168.18.225
+    hili_send_packet_conf.dst_ip = 0xc0a81278; //192.168.18.16
+
+    hili_send_module_send_udp_packet(ptr, len, &hili_send_packet_conf);
+    return 0;
+}
+
+
 int process_handle(cvm_common_wqe_t * swp)
 {
 		if(cvmx_get_cycle() - mytime > 8000000000)
 		{
 				cvmx_pow_iq_com_cnt_t pow_iq_com_cnt;
 				pow_iq_com_cnt.u64 = cvmx_read_csr(CVMX_POW_IQ_COM_CNT);
-				printf("PAKCET:%llu,     WQE:%llu,   POW:%llu\n", cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_PACKET_POOL)), cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_WQE_POOL)), pow_iq_com_cnt.s.iq_cnt);
 				mytime = cvmx_get_cycle();
+
+				char * temp;
+				sprintf(temp, "PAKCET:%llu,     WQE:%llu,   POW:%llu\n", cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_PACKET_POOL)), cvmx_read_csr(CVMX_FPA_QUEX_AVAILABLE(CVMX_FPA_WQE_POOL)), pow_iq_com_cnt.s.iq_cnt);
+				send_log(temp, strlen(temp));
+
 		}
 		
 		
@@ -905,18 +1050,18 @@ int process_handle(cvm_common_wqe_t * swp)
 		list1_entry_t * list1 = list1_lookup(swp);
 		if(list1 != NULL)
 		{
-				//å¦‚æžœä¸ºæ‹†é“¾æŽ¥æ•°æ®åŒ…ï¼Œåˆ™éœ€è¦åˆ é™¤ç›¸åº”è§„åˆ™åˆ—è¡¨é¡¹
+				//Èç¹ûÎª²ðÁ´½ÓÊý¾Ý°ü£¬ÔòÐèÒªÉ¾³ýÏàÓ¦¹æÔòÁÐ±íÏî
 				if(th->th_flags & 0x05)// fin is 0x01; rst is 0x04
 				{			
 						//list2_entry_t * list2 = list2_lookup(list1);
 						//list2.list1_links--;
 						//if(list2.list1_links == 0)
 						//{
-						//æ²¡æœ‰list1_entryé“¾æŽ¥åˆ°list2_entryä¸Šï¼Œåˆ é™¤list2_entry 
+						//Ã»ÓÐlist1_entryÁ´½Óµ½list2_entryÉÏ£¬É¾³ýlist2_entry 
 						//cvm_common_free_fpa_buffer(list2, CVM_FPA_1024B_POOL, 8);
 						//list2 = NULL;
 						//}
-						//åˆ é™¤list1_entry
+						//É¾³ýlist1_entry
 
 						//cvm_common_free_fpa_buffer(list1, CVM_FPA_1024B_POOL, 8);
 						printf("find TCP rst or fin\n");
@@ -925,13 +1070,13 @@ int process_handle(cvm_common_wqe_t * swp)
 						return res;
 				}
 
-				//éžæ‹†é“¾æŽ¥æ•°æ®åŒ…
+				//·Ç²ðÁ´½ÓÊý¾Ý°ü
 				http_data * http_entry = NULL;
 				http_entry = http_parse(swp, list1->status, list1->interf);
-				//æ£€æŸ¥æ˜¯å¦ä¸ºhttpåè®®æ•°æ®åŒ…
+				//¼ì²éÊÇ·ñÎªhttpÐ­ÒéÊý¾Ý°ü
 				if(http_entry->is_http)
 				{
-						//æœåŠ¡å™¨å›žå¤ç™»å½•ç¡®è®¤ï¼Œè¯´æ˜Žç”¨æˆ·æˆåŠŸç™»å½•			
+						//·þÎñÆ÷»Ø¸´µÇÂ¼È·ÈÏ£¬ËµÃ÷ÓÃ»§³É¹¦µÇÂ¼			
 						if(list1->status == S1 && http_entry->interf == S3_i)
 						{
 								if(http_entry->login_done == true)
@@ -958,15 +1103,15 @@ int process_handle(cvm_common_wqe_t * swp)
 							return res;
 						}
 
-						//ç”¨æˆ·å‘é€ä¸Šä¼ æ•°æ®å‘½ä»¤put
+						//ÓÃ»§·¢ËÍÉÏ´«Êý¾ÝÃüÁîput
 						if(list1->status == S2)
 						{
 								//Clietn->Server
 								if(http_entry->put_content == true && http_entry->interf == S3_i)
 								{
 										printf("put content in S2 S3 \n");
-										list1->status = S3;//å°†list1ç»“æž„ä½“çš„çŠ¶æ€è®¾ç½®ä¸ºæ•°æ®ä¸Šä¼ S3
-										if(http_entry->there_is_data)//å¦‚æžœåŒ…å«æ•°æ®éƒ¨åˆ†ï¼Œåˆ™å¯¹æ•°æ®è¿›è¡ŒåŠ å¯†ï¼Œå¦åˆ™ç›´æŽ¥è¿”å›ž
+										list1->status = S3;//½«list1½á¹¹ÌåµÄ×´Ì¬ÉèÖÃÎªÊý¾ÝÉÏ´«S3
+										if(http_entry->there_is_data)//Èç¹û°üº¬Êý¾Ý²¿·Ö£¬Ôò¶ÔÊý¾Ý½øÐÐ¼ÓÃÜ£¬·ñÔòÖ±½Ó·µ»Ø
 										{
 												printf("put content, encrypt first packet in S2 S3\n");
 												/*
@@ -1011,9 +1156,47 @@ int process_handle(cvm_common_wqe_t * swp)
 								http_entry = NULL;
 								return res;	
 						}
+						if(list1->status == S4&&http_entry->put_content== true)
+						{
+								//Clietn->Server
+								if(http_entry->interf == S3_i)
+								{
+										printf("put content in S4 S3 \n");
+										list1->status = S3;//½«list1½á¹¹ÌåµÄ×´Ì¬ÉèÖÃÎªÊý¾ÝÉÏ´«S3
+										if(http_entry->there_is_data)//Èç¹û°üº¬Êý¾Ý²¿·Ö£¬Ôò¶ÔÊý¾Ý½øÐÐ¼ÓÃÜ£¬·ñÔòÖ±½Ó·µ»Ø
+										{
+												printf("put content, encrypt first packet in S4 S3\n");
+												/*
+												int i = 0;
+												char * ptrp = (char *)cvmx_phys_to_ptr(swp->hw_wqe.packet_ptr.s.addr); 
+												printf("http_entry->pos %d", http_entry->pos);
+												while(i<100)
+												{
+													printf("%X", ptrp + i + http_entry->pos);
+													if(i%15 == 0)
+														printf("\n");
+												}
+												printf("\n");
+												*/
+												encryption(list1->enc_map, swp, http_entry->pos);
+												res = 0;
+										}
+								}else if (http_entry->interf == swift)
+								{
+									printf("put content in S4 swift \n");
+									list1->status = S3;
+									if (http_entry->there_is_data)
+									{
+										printf("put content, encrypt first packet in S4 swift\n");
+										encryption(list1->enc_map, swp, http_entry->pos);
+										res = 0;
+									}
+								}
+							}
+						
 
 
-						//ä¸‹è½½æ•°æ®ç»“æŸ						//ä¸Šä¼ æ•°æ®æˆåŠŸ
+						//ÏÂÔØÊý¾Ý½áÊø						//ÉÏ´«Êý¾Ý³É¹¦
 						if((list1->status == S4 && http_entry->get_done == true) || (list1->status == S3 && http_entry->put_done))
 						{
 								printf("put or get done!\n");
@@ -1024,9 +1207,9 @@ int process_handle(cvm_common_wqe_t * swp)
 						}
 						//printf("Waring\n");			
 				}
-				else//åœ¨list1ä¸­ï¼Œéžæ‹†é“¾æŽ¥æ•°æ®åŒ…ï¼Œä¹Ÿä¸å¸¦httpå¤´ï¼Œåº”è¯¥ä¸ºéœ€è¦åŠ è§£å¯†çš„æ•°æ®åŒ…ï¼Œæ ¹æ®list1_entry.stateçŠ¶æ€æœºè¿›è¡ŒåŠ è§£å¯†
+				else//ÔÚlist1ÖÐ£¬·Ç²ðÁ´½ÓÊý¾Ý°ü£¬Ò²²»´øhttpÍ·£¬Ó¦¸ÃÎªÐèÒª¼Ó½âÃÜµÄÊý¾Ý°ü£¬¸ù¾Ýlist1_entry.state×´Ì¬»ú½øÐÐ¼Ó½âÃÜ
 				{
-						//æ•°æ®ä¸Šä¼ è¿‡ç¨‹ï¼Œéœ€è¦å¯¹æ•°æ®è¿›è¡ŒåŠ å¯†	//æ•°æ®ä¸‹è½½è¿‡ç¨‹ï¼Œéœ€è¦å¯¹æ•°æ®è¿›è¡Œè§£å¯†	
+						//Êý¾ÝÉÏ´«¹ý³Ì£¬ÐèÒª¶ÔÊý¾Ý½øÐÐ¼ÓÃÜ	//Êý¾ÝÏÂÔØ¹ý³Ì£¬ÐèÒª¶ÔÊý¾Ý½øÐÐ½âÃÜ	
 						if(list1->status == S3 || list1->status == S4)
 						{
 								res = 0;
@@ -1044,76 +1227,93 @@ int process_handle(cvm_common_wqe_t * swp)
 				http_entry = NULL;
 				return res;
 		}
-		else//é“¾æŽ¥ä¸åœ¨è§„åˆ™åˆ—è¡¨ä¸­
+		else//Á´½Ó²»ÔÚ¹æÔòÁÐ±íÖÐ
 		{
 				//printf("not in list1\n");
-				//æ˜¯å¦ä¸ºæœåŠ¡å™¨ä¸Žå®¢æˆ·ç«¯ä¹‹é—´çš„æ–°å»ºé“¾æŽ¥
+				//ÊÇ·ñÎª·þÎñÆ÷Óë¿Í»§¶ËÖ®¼äµÄÐÂ½¨Á´½Ó
 				http_data * http_entry;
 				http_entry = http_parse(swp, S0, unknown);
 				if(http_entry->is_http == true)
 				{
-						if(http_entry->login == true && http_entry->interf == S3_i)//S3ç”¨æˆ·åˆ›å»ºæ–°é“¾æŽ¥æ—¶å‘é€
-						{
-								printf("login\n");
-								list1_entry_t * list1 = make_list1_entry(swp);
-
-								/*
-								   å¡«å†™list1ç»“æž„ä½“çš„æ•°æ®éƒ¨åˆ† 
-								 */
-								list1->interf = http_entry->interf;
-								list1->tag1 = swp->hw_wqe.tag;
-								memcpy(list1->username, http_entry->username, 128);
-
-								//hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
-								list1->status = S1;
-								list1->inport = swp->hw_wqe.ipprt;
-								if( list1->inport >= portbase + portnum)
-										list1->outport = list1->inport - portnum;
-								else
-										list1->outport = list1->inport + portnum;
-						}else if(http_entry->login == true && http_entry->interf == swift)
-						{
+					if(http_entry->login == true && http_entry->interf == S3_i)//S3ÓÃ»§´´½¨ÐÂÁ´½ÓÊ±·¢ËÍ
+					{
+							printf("s3 unnormal login\n");
 							list1_entry_t * list1 = make_list1_entry(swp);
+
+							/*
+							   ÌîÐ´list1½á¹¹ÌåµÄÊý¾Ý²¿·Ö 
+							 */
 							list1->interf = http_entry->interf;
 							list1->tag1 = swp->hw_wqe.tag;
 							memcpy(list1->username, http_entry->username, 128);
-							memcpy(list1->password, http_entry->password, 128);
+
+							//hash_md5(list1->secret_key, (uint8_t*)list1->username, strlen(list1->username));
 							list1->status = S1;
 							list1->inport = swp->hw_wqe.ipprt;
 							if( list1->inport >= portbase + portnum)
 									list1->outport = list1->inport - portnum;
 							else
 									list1->outport = list1->inport + portnum;
-
-						}else if(http_entry->put_content == true && http_entry->interf == swift)
-						{
-							list1_entry_t * list1 = make_list1_entry(swp);
-							list1->interf = http_entry->interf;
-							list1->tag1 = swp->hw_wqe.tag;
-							memcpy(list1->auth_token, http_entry->auth_token, 128);
-							list1->inport = swp->hw_wqe.ipprt;
-							if( list1->inport >= portbase + portnum)
+					}else if(http_entry->login == true && http_entry->interf == swift)
+					{
+						printf("switf unnormal login\n");
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->username, http_entry->username, 128);
+						memcpy(list1->password, http_entry->password, 128);
+						list1->status = S1;
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
 								list1->outport = list1->inport - portnum;
-							else
+						else
 								list1->outport = list1->inport + portnum;
 
-							set_enc_map(list1, swift);
+					}else if(http_entry->put_content == true && http_entry->interf == swift)
+					{
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->auth_token, http_entry->auth_token, 128);
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
+							list1->outport = list1->inport - portnum;
+						else
+							list1->outport = list1->inport + portnum;
 
-							printf("put content in S0 swift\n");
-							list1->status = S3;//å°†list1ç»“æž„ä½“çš„çŠ¶æ€è®¾ç½®ä¸ºæ•°æ®ä¸Šä¼ S3
-							if(http_entry->there_is_data)//å¦‚æžœåŒ…å«æ•°æ®éƒ¨åˆ†ï¼Œåˆ™å¯¹æ•°æ®è¿›è¡ŒåŠ å¯†ï¼Œå¦åˆ™ç›´æŽ¥è¿”å›ž
-							{
-								printf("put content, encrypt first packet in S0 swift \n");
-											
-								encryption(list1->enc_map, swp, http_entry->pos);
-								res = 0;
-							}
-						}else if(http_entry->get_first == true && http_entry->interf == swift)
+						set_enc_map(list1, swift);
+
+						printf("put content in S0 swift\n");
+						list1->status = S3;//½«list1½á¹¹ÌåµÄ×´Ì¬ÉèÖÃÎªÊý¾ÝÉÏ´«S3
+						if(http_entry->there_is_data)//Èç¹û°üº¬Êý¾Ý²¿·Ö£¬Ôò¶ÔÊý¾Ý½øÐÐ¼ÓÃÜ£¬·ñÔòÖ±½Ó·µ»Ø
 						{
+							printf("put content, encrypt first packet in S0 swift \n");
+										
+							encryption(list1->enc_map, swp, http_entry->pos);
+							res = 0;
+						}
+					}else if(http_entry->get_first == true && http_entry->interf == swift)
+					{
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->auth_token, http_entry->auth_token, 128);
+						list1->status = S2;
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
+								list1->outport = list1->inport - portnum;
+						else
+								list1->outport = list1->inport + portnum;
+
+						set_enc_map(list1, swift);
+
+					}else if(http_entry->head_first == true && http_entry->interf == swift)
+					{
 							list1_entry_t * list1 = make_list1_entry(swp);
 							list1->interf = http_entry->interf;
 							list1->tag1 = swp->hw_wqe.tag;
 							memcpy(list1->auth_token, http_entry->auth_token, 128);
+							printf("after head_first   set S2\n");
 							list1->status = S2;
 							list1->inport = swp->hw_wqe.ipprt;
 							if( list1->inport >= portbase + portnum)
@@ -1122,27 +1322,64 @@ int process_handle(cvm_common_wqe_t * swp)
 									list1->outport = list1->inport + portnum;
 
 							set_enc_map(list1, swift);
+					}else if(http_entry->put_content == true && http_entry->interf == S3_i)
+					{
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->username, http_entry->username, 128);
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
+							list1->outport = list1->inport - portnum;
+						else
+							list1->outport = list1->inport + portnum;
 
+						set_enc_map(list1, S3_i);
 
-
-						}else if(http_entry->head_first == true && http_entry->interf == swift)
+						printf("unnormal put content in S0 S3_i\n");
+						list1->status = S3;//½«list1½á¹¹ÌåµÄ×´Ì¬ÉèÖÃÎªÊý¾ÝÉÏ´«S3
+						if(http_entry->there_is_data)//Èç¹û°üº¬Êý¾Ý²¿·Ö£¬Ôò¶ÔÊý¾Ý½øÐÐ¼ÓÃÜ£¬·ñÔòÖ±½Ó·µ»Ø
 						{
-								list1_entry_t * list1 = make_list1_entry(swp);
-								list1->interf = http_entry->interf;
-								list1->tag1 = swp->hw_wqe.tag;
-								memcpy(list1->auth_token, http_entry->auth_token, 128);
-								printf("after head_first   set S2\n");
-								list1->status = S2;
-								list1->inport = swp->hw_wqe.ipprt;
-								if( list1->inport >= portbase + portnum)
-										list1->outport = list1->inport - portnum;
-								else
-										list1->outport = list1->inport + portnum;
-
-								set_enc_map(list1, swift);
+							printf("put content, encrypt first packet in S0 swift \n");
+										
+							encryption(list1->enc_map, swp, http_entry->pos);
+							res = 0;
 						}
+					}else if(http_entry->get_first == true && http_entry->interf == S3_i)
+					{
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->username, http_entry->username, 128);
+						list1->status = S2;
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
+								list1->outport = list1->inport - portnum;
+						else
+								list1->outport = list1->inport + portnum;
 
-				}
+						set_enc_map(list1, S3_i);
+
+						printf("unnormal get content in S0 S3_i\n");
+					}else if(http_entry->head_first == true && http_entry->interf == S3_i)
+					{
+							list1_entry_t * list1 = make_list1_entry(swp);
+							list1->interf = http_entry->interf;
+							list1->tag1 = swp->hw_wqe.tag;
+							memcpy(list1->username, http_entry->username, 128);
+							printf("after head_first   set S2\n");
+							list1->status = S2;
+							list1->inport = swp->hw_wqe.ipprt;
+							if( list1->inport >= portbase + portnum)
+									list1->outport = list1->inport - portnum;
+							else
+									list1->outport = list1->inport + portnum;
+
+							set_enc_map(list1, S3_i);
+
+						printf("unnormal head first in S0 S3_i\n");
+					}
+			}
 				cvm_common_free_fpa_buffer ((void*)http_entry, CVMX_FPA_PACKET_POOL, CVMX_FPA_PACKET_POOL_SIZE / CVMX_CACHE_LINE_SIZE);
 				return res;
 		}
