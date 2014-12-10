@@ -91,7 +91,7 @@
 #include "hili_send_module.h"
 #include <stdbool.h>
 #include <openssl/rc4.h>
-
+//hili
 #ifdef INET6
 extern void cvm_ip6_in6_ifattach __P((cvm_enet_ifnet_t *, cvm_enet_ifnet_t *));
 extern void cvm_ip6_in6_ifdetach __P((cvm_enet_ifnet_t *));
