@@ -1309,19 +1309,19 @@ int process_handle(cvm_common_wqe_t * swp)
 
 					}else if(http_entry->head_first == true && http_entry->interf == swift)
 					{
-							list1_entry_t * list1 = make_list1_entry(swp);
-							list1->interf = http_entry->interf;
-							list1->tag1 = swp->hw_wqe.tag;
-							memcpy(list1->auth_token, http_entry->auth_token, 128);
-							printf("after head_first   set S2\n");
-							list1->status = S2;
-							list1->inport = swp->hw_wqe.ipprt;
-							if( list1->inport >= portbase + portnum)
-									list1->outport = list1->inport - portnum;
-							else
-									list1->outport = list1->inport + portnum;
+						list1_entry_t * list1 = make_list1_entry(swp);
+						list1->interf = http_entry->interf;
+						list1->tag1 = swp->hw_wqe.tag;
+						memcpy(list1->auth_token, http_entry->auth_token, 128);
+						printf("after head_first   set S2\n");
+						list1->status = S2;
+						list1->inport = swp->hw_wqe.ipprt;
+						if( list1->inport >= portbase + portnum)
+							list1->outport = list1->inport - portnum;
+						else
+							list1->outport = list1->inport + portnum;
 
-							set_enc_map(list1, swift);
+						set_enc_map(list1, swift);
 					}else if(http_entry->put_content == true && http_entry->interf == S3_i)
 					{
 						list1_entry_t * list1 = make_list1_entry(swp);
